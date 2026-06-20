@@ -40,8 +40,11 @@ func New(cfg *config.ServerConfig) *Server {
 // Add registers a new peer: validate, lock, allocate an IP, append a canonical
 // [Peer] block, persist atomically, and sync the live interface (spec §2, §6).
 func (s *Server) Add(req protocol.Request) protocol.AddResponse {
-	if req.Name == "" || req.PublicKey == "" {
-		return protocol.AddResponse{Status: badRequest("name and public_key are required")}
+	if err := wgconf.ValidPeerName(req.Name); err != nil {
+		return protocol.AddResponse{Status: badRequest(err.Error())}
+	}
+	if req.PublicKey == "" {
+		return protocol.AddResponse{Status: badRequest("public_key is required")}
 	}
 	if _, err := wgkey.Decode(req.PublicKey); err != nil {
 		return protocol.AddResponse{Status: badRequest("public_key: " + err.Error())}

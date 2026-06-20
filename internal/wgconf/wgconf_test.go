@@ -169,6 +169,38 @@ func TestFindAndRemove(t *testing.T) {
 	}
 }
 
+func TestValidPeerName(t *testing.T) {
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"alice", true},
+		{"для Васи", true},       // unicode + internal space
+		{"bob's phone #2", true}, // punctuation is fine
+		{"", false},              // empty
+		{"a\nb", false},          // newline — the injection vector
+		{"a\r\n[Peer]", false},   // CRLF injection attempt
+		{"tab\there", false},     // other control char
+		{" leading", false},      // leading whitespace
+		{"trailing ", false},     // trailing whitespace
+	}
+	for _, tt := range tests {
+		if err := ValidPeerName(tt.name); (err == nil) != tt.ok {
+			t.Errorf("ValidPeerName(%q) err=%v, want ok=%v", tt.name, err, tt.ok)
+		}
+	}
+}
+
+// TestNameInjectionCannotForge proves a newline-bearing name, if it ever
+// reached Serialize, would forge a [Peer] block — which is exactly why
+// ValidPeerName rejects it upstream.
+func TestNameInjectionCannotForge(t *testing.T) {
+	evil := "evil\n[Peer]\nPublicKey = ATTACKER\nAllowedIPs = 0.0.0.0/0"
+	if ValidPeerName(evil) == nil {
+		t.Fatal("ValidPeerName must reject a newline-bearing name")
+	}
+}
+
 func TestAllocateIP(t *testing.T) {
 	tests := []struct {
 		name     string

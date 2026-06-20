@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"unicode"
 )
 
 // Peer is one [Peer] block. Identity is PublicKey; Name is a human label only
@@ -196,6 +197,27 @@ func (c *Conf) FindByName(name string) int {
 // NameExists reports whether a peer with the given non-empty name exists.
 func (c *Conf) NameExists(name string) bool {
 	return name != "" && c.FindByName(name) >= 0
+}
+
+// ValidPeerName checks that a name can be written as a single-line "# name:"
+// comment without corrupting the conf. The critical case is a newline, which
+// would otherwise let a name inject extra [Peer] blocks; all control characters
+// are rejected for good measure. Leading/trailing whitespace is rejected so the
+// stored name round-trips exactly (the parser trims it). Unicode letters and
+// internal spaces (e.g. "для Васи") are fine.
+func ValidPeerName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is empty")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("name must not contain control characters (newlines, tabs, etc.)")
+		}
+	}
+	if strings.TrimSpace(name) != name {
+		return fmt.Errorf("name must not have leading or trailing whitespace")
+	}
+	return nil
 }
 
 // AddPeer appends a peer block.

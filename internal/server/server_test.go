@@ -131,6 +131,26 @@ func TestServerAddListKill(t *testing.T) {
 	}
 }
 
+func TestServerRejectsNameInjection(t *testing.T) {
+	s, confPath, _ := newTestServer(t)
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evil := "evil\n[Peer]\nPublicKey = " + clientPub(t) + "\nAllowedIPs = 0.0.0.0/0"
+	r := s.Add(protocol.Request{Op: protocol.OpAdd, Name: evil, PublicKey: clientPub(t)})
+	if r.Error != protocol.ErrBadRequest {
+		t.Fatalf("injection add error = %q, want bad_request", r.Error)
+	}
+	after, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("conf must be untouched after a rejected add")
+	}
+}
+
 func TestServerNoFreeIP(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	s.Cfg.Subnet = "10.20.0.0/30" // usable .1 .2

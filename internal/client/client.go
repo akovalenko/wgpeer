@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/akovalenko/wgpeer/internal/protocol"
+	"github.com/akovalenko/wgpeer/internal/wgconf"
 	"github.com/akovalenko/wgpeer/internal/wgkey"
 )
 
@@ -63,6 +64,9 @@ type AddOptions struct {
 // Add generates a keypair (+PSK unless NoPSK), asks the server to register the
 // public key, and assembles the client config. The private key stays local.
 func (c *Client) Add(opts AddOptions) (configText string, resp protocol.AddResponse, err error) {
+	if err := wgconf.ValidPeerName(opts.Name); err != nil {
+		return "", resp, fmt.Errorf("invalid name: %w", err)
+	}
 	priv, err := wgkey.GeneratePrivateKey()
 	if err != nil {
 		return "", resp, err
