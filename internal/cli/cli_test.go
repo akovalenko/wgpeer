@@ -65,27 +65,21 @@ func TestParseInterspersed(t *testing.T) {
 func TestResolveTerminalQR(t *testing.T) {
 	tests := []struct {
 		mode      string
-		png       bool
-		tty       bool
 		want      bool
 		wantError bool
 	}{
-		{"auto", false, true, true, false},    // interactive: show QR
-		{"auto", false, false, false, false},  // piped/redirected: config only
-		{"auto", true, true, false, false},    // PNG requested: no terminal QR
-		{"always", false, false, true, false}, // forced on even when piped
-		{"always", true, false, true, false},  // forced on alongside PNG
-		{"never", false, true, false, false},  // forced off even on a TTY
-		{"bogus", false, true, false, true},   // invalid mode
+		{"always", true, false}, // default: draw on stderr
+		{"never", false, false}, // suppressed
+		{"bogus", false, true},  // invalid mode
 	}
 	for _, tt := range tests {
-		got, err := resolveTerminalQR(tt.mode, tt.png, tt.tty)
+		got, err := resolveTerminalQR(tt.mode)
 		if (err != nil) != tt.wantError {
-			t.Errorf("resolveTerminalQR(%q,%v,%v) err=%v, wantError=%v", tt.mode, tt.png, tt.tty, err, tt.wantError)
+			t.Errorf("resolveTerminalQR(%q) err=%v, wantError=%v", tt.mode, err, tt.wantError)
 			continue
 		}
 		if got != tt.want {
-			t.Errorf("resolveTerminalQR(%q,%v,%v) = %v, want %v", tt.mode, tt.png, tt.tty, got, tt.want)
+			t.Errorf("resolveTerminalQR(%q) = %v, want %v", tt.mode, got, tt.want)
 		}
 	}
 }

@@ -56,19 +56,19 @@ wgpeer client add tablet --no-psk            # no preshared key
 wgpeer client add kiosk --qr-png kiosk.png   # also write a PNG
 wgpeer client add phone --invert             # flip QR colours for a light terminal
 
-# piping/redirecting gives just the config — no QR pollutes the file:
+# piping/redirecting gives just the config — the QR is on stderr, not in the file:
 wgpeer client add work > work.conf && nmcli connection import type wireguard file work.conf
-wgpeer client add work --qr always > work.conf  # force the QR (still on stderr)
+wgpeer client add work --qr never > work.conf   # suppress the QR entirely
 
 wgpeer client list
 wgpeer client list --json
 wgpeer client kill bob
 ```
 
-The config is written to **stdout** and the terminal QR to **stderr**. By default
-(`--qr auto`) the QR is drawn only when stdout is a TTY, so redirecting yields a
-clean config file. Use `--qr always` / `--qr never` to override; `--qr-png FILE`
-writes a PNG independently of the terminal QR.
+The config is written to **stdout** and the terminal QR to **stderr**, so
+redirecting stdout yields a clean config file with the QR still shown on the
+terminal. Use `--qr never` to suppress the QR; `--qr-png FILE` writes a PNG
+independently of the terminal QR.
 
 The peer **name is a label, not an identity** — the real identity is the public
 key. `kill` resolves a name to its key; adding a duplicate name fails with

@@ -50,9 +50,9 @@ func usage() {
 
   wgpeer client <cmd> [flags] [name]
       add  <name> [--server S] [--iface I] [--endpoint NAME] [--no-psk]
-                  [--split] [--qr auto|always|never] [--qr-png FILE] [--invert]
-           The config goes to stdout; the terminal QR (auto: only when stdout
-           is a TTY) goes to stderr, so "add ... > foo.conf" yields just the config.
+                  [--split] [--qr always|never] [--qr-png FILE] [--invert]
+           The config goes to stdout and the terminal QR to stderr, so
+           "add ... > foo.conf" yields just the config.
       list        [--server S] [--iface I] [--json]
       kill <name> [--server S] [--iface I]
 `)
@@ -193,7 +193,7 @@ func clientAdd(args []string) int {
 	endpoint := fs.String("endpoint", "", "endpoint menu name (default: first)")
 	noPSK := fs.Bool("no-psk", false, "do not generate a preshared key")
 	split := fs.Bool("split", false, "split tunnel: route only the server subnet")
-	qrMode := fs.String("qr", "auto", "terminal QR: auto (only when stdout is a TTY), always, or never")
+	qrMode := fs.String("qr", "always", "draw the terminal QR on stderr: always or never")
 	qrPNG := fs.String("qr-png", "", "also write the QR to this PNG file")
 	qrSize := fs.Int("qr-size", 256, "PNG QR size in pixels (with --qr-png)")
 	invert := fs.Bool("invert", false, "invert QR colours for light-on-dark terminals")
@@ -209,7 +209,7 @@ func clientAdd(args []string) int {
 
 	// Validate output options before any keygen or server round-trip, so a bad
 	// flag never leaves a stray peer behind.
-	showQR, err := resolveTerminalQR(*qrMode, *qrPNG != "", isTerminal(os.Stdout))
+	showQR, err := resolveTerminalQR(*qrMode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wgpeer client add: %v\n", err)
 		return 2
@@ -343,28 +343,16 @@ func joinArgs(args []string) string {
 	return strings.Join(args, " ")
 }
 
-// resolveTerminalQR decides whether to draw the terminal QR. Default (auto)
-// shows it only when stdout is a TTY and no PNG was requested, so
-// `wgpeer client add … > foo.conf` yields just the config; always|never override.
-func resolveTerminalQR(mode string, pngRequested, stdoutTTY bool) (bool, error) {
+// resolveTerminalQR decides whether to draw the terminal QR (always written to
+// stderr, so it never mixes with the config on stdout). Default is on; --qr never
+// suppresses it.
+func resolveTerminalQR(mode string) (bool, error) {
 	switch mode {
 	case "always":
 		return true, nil
 	case "never":
 		return false, nil
-	case "auto":
-		return !pngRequested && stdoutTTY, nil
 	default:
-		return false, fmt.Errorf("--qr must be auto, always or never")
+		return false, fmt.Errorf("--qr must be always or never")
 	}
-}
-
-// isTerminal reports whether f is attached to a character device (a terminal).
-// Stdlib-only isatty — keeps the client dependency-free (spec §14).
-func isTerminal(f *os.File) bool {
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeCharDevice != 0
 }

@@ -99,9 +99,7 @@ func (c *Client) Add(opts AddOptions) (configText string, resp protocol.AddRespo
 		return "", resp, err
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
-		// The add may have succeeded server-side even if the reply is garbled,
-		// so surface the private key for manual recovery rather than losing it.
-		return "", resp, fmt.Errorf("decoding add response: %w\n(if a peer was created, its private key: %s)", err, wgkey.Encode(priv))
+		return "", resp, fmt.Errorf("decoding add response: %w", err)
 	}
 	if !resp.OK {
 		return "", resp, responseError(resp.Status)
@@ -109,9 +107,9 @@ func (c *Client) Add(opts AddOptions) (configText string, resp protocol.AddRespo
 
 	endpoint, err := chooseEndpoint(resp.Endpoints, opts.Endpoint)
 	if err != nil {
-		// Should not happen: the server already validated the endpoint before
-		// creating the peer. Surface the key so it is never silently lost.
-		return "", resp, fmt.Errorf("%w\n(peer was created; private key: %s)", err, wgkey.Encode(priv))
+		// Should not happen: the server validated the endpoint before creating
+		// the peer.
+		return "", resp, err
 	}
 	configText = assembleConfig(wgkey.Encode(priv), psk, endpoint, opts.Split, resp)
 	return configText, resp, nil
