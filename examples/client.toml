@@ -1,0 +1,16 @@
+# Client menu — install as ~/.config/wgpeer/client.toml
+# A menu of servers and the interfaces each one exposes.
+
+default_server = "home"
+
+[[server]]
+name   = "home"
+ssh    = "anton@vpn.example" # ssh target (or an alias from ~/.ssh/config)
+sudo   = true               # prefix the remote command with sudo
+ifaces = ["wg0", "wg1"]     # available interfaces; the first is the default
+
+# [[server]]
+# name   = "work"
+# ssh    = "work-vpn"
+# sudo   = true
+# ifaces = ["wg0"]

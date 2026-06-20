@@ -1,0 +1,6 @@
+# Scope sudo to exactly `wgpeer server`, never a root shell (spec §10).
+# Install as /etc/sudoers.d/wgpeer (chmod 0440, validate with visudo -c).
+#
+# Adjust the username and the binary path to your install.
+
+anton ALL=(root) NOPASSWD: /usr/local/bin/wgpeer server *

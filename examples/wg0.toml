@@ -1,0 +1,25 @@
+# Server config for interface wg0 — install as /etc/wgpeer/wg0.toml
+# The interface name comes from the filename (wg0.toml -> wg0). No file for an
+# interface means wgpeer refuses to touch it.
+
+conf_path = "/etc/wireguard/wg0.conf" # source of truth for peers
+subnet    = "10.10.0.0/24"            # address pool for peers (v4-only in v1)
+reserved  = ["10.10.0.1"]             # taken outside the peer list (server, gateways)
+
+[template] # server-owned defaults baked into the client config
+dns                  = ["10.10.0.1"]
+allowed_ips          = ["0.0.0.0/0", "::/0"] # full-tunnel by default
+persistent_keepalive = 25
+mtu                  = 1340 # accounts for nested encapsulation (see spec §9)
+psk_default          = true
+
+# Endpoint menu (vantage-dependent; client picks one, first is the default).
+[[endpoint]]
+name = "public"
+addr = "vpn.example:51820"
+[[endpoint]]
+name = "tspu-443"
+addr = "vpn.example:443"
+[[endpoint]]
+name = "lan"
+addr = "10.0.0.2:51820"
