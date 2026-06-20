@@ -48,22 +48,32 @@ Client side: create `~/.config/wgpeer/client.toml`
 ## Usage
 
 ```sh
-# add a peer, print the config and a terminal QR
+# add a peer: config to stdout, terminal QR to stderr (when stdout is a TTY)
 wgpeer client add "Вася's phone"
 wgpeer client add bob --iface wg1 --endpoint tspu-443
-wgpeer client add laptop --split            # route only the server subnet
-wgpeer client add tablet --no-psk           # no preshared key
-wgpeer client add kiosk --qr-png kiosk.png  # write a PNG instead of a terminal QR
-wgpeer client add phone --invert            # flip QR colours for a light terminal
+wgpeer client add laptop --split             # route only the server subnet
+wgpeer client add tablet --no-psk            # no preshared key
+wgpeer client add kiosk --qr-png kiosk.png   # also write a PNG
+wgpeer client add phone --invert             # flip QR colours for a light terminal
+
+# piping/redirecting gives just the config — no QR pollutes the file:
+wgpeer client add work > work.conf && nmcli connection import type wireguard file work.conf
+wgpeer client add work --qr always > work.conf  # force the QR (still on stderr)
 
 wgpeer client list
 wgpeer client list --json
 wgpeer client kill bob
 ```
 
+The config is written to **stdout** and the terminal QR to **stderr**. By default
+(`--qr auto`) the QR is drawn only when stdout is a TTY, so redirecting yields a
+clean config file. Use `--qr always` / `--qr never` to override; `--qr-png FILE`
+writes a PNG independently of the terminal QR.
+
 The peer **name is a label, not an identity** — the real identity is the public
 key. `kill` resolves a name to its key; adding a duplicate name fails with
-`name_taken`.
+`name_taken`. Names must be a single line (no control characters) and carry no
+leading/trailing whitespace.
 
 ## Configuration
 

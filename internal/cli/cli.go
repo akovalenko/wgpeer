@@ -50,7 +50,9 @@ func usage() {
 
   wgpeer client <cmd> [flags] [name]
       add  <name> [--server S] [--iface I] [--endpoint NAME] [--no-psk]
-                  [--split] [--qr-png FILE] [--invert]
+                  [--split] [--qr auto|always|never] [--qr-png FILE] [--invert]
+           The config goes to stdout; the terminal QR (auto: only when stdout
+           is a TTY) goes to stderr, so "add ... > foo.conf" yields just the config.
       list        [--server S] [--iface I] [--json]
       kill <name> [--server S] [--iface I]
 `)
@@ -191,15 +193,25 @@ func clientAdd(args []string) int {
 	endpoint := fs.String("endpoint", "", "endpoint menu name (default: first)")
 	noPSK := fs.Bool("no-psk", false, "do not generate a preshared key")
 	split := fs.Bool("split", false, "split tunnel: route only the server subnet")
-	qrPNG := fs.String("qr-png", "", "write the QR to this PNG file instead of the terminal")
+	qrMode := fs.String("qr", "auto", "terminal QR: auto (only when stdout is a TTY), always, or never")
+	qrPNG := fs.String("qr-png", "", "also write the QR to this PNG file")
 	qrSize := fs.Int("qr-size", 256, "PNG QR size in pixels (with --qr-png)")
 	invert := fs.Bool("invert", false, "invert QR colours for light-on-dark terminals")
-	if err := fs.Parse(args); err != nil {
+	positionals, err := parseInterspersed(fs, args)
+	if err != nil {
 		return 2
 	}
-	name := joinArgs(fs.Args())
+	name := joinArgs(positionals)
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "wgpeer client add: a peer name is required")
+		return 2
+	}
+
+	// Validate output options before any keygen or server round-trip, so a bad
+	// flag never leaves a stray peer behind.
+	showQR, err := resolveTerminalQR(*qrMode, *qrPNG != "", isTerminal(os.Stdout))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wgpeer client add: %v\n", err)
 		return 2
 	}
 
@@ -219,22 +231,27 @@ func clientAdd(args []string) int {
 		return 1
 	}
 
+	// The config is the machine-consumable artifact → stdout.
 	fmt.Print(cfgText)
+
 	if *qrPNG != "" {
 		if err := client.WriteQRPNG(cfgText, *qrPNG, *qrSize); err != nil {
 			fmt.Fprintf(os.Stderr, "wgpeer: writing QR PNG: %v\n", err)
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "wrote QR to %s\n", *qrPNG)
-		return 0
 	}
-	qr, err := client.RenderTerminalQR(cfgText, *invert)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "wgpeer: rendering QR: %v\n", err)
-		return 1
+
+	if showQR {
+		qr, err := client.RenderTerminalQR(cfgText, *invert)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "wgpeer: rendering QR: %v\n", err)
+			return 1
+		}
+		// QR is a human aid → stderr, so it never pollutes a redirected config.
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, qr)
 	}
-	fmt.Println()
-	fmt.Println(qr)
 	return 0
 }
 
@@ -278,10 +295,11 @@ func clientKill(args []string) int {
 	fs := flag.NewFlagSet("client kill", flag.ContinueOnError)
 	server := fs.String("server", "", "server name from the client menu")
 	iface := fs.String("iface", "", "interface name on the server")
-	if err := fs.Parse(args); err != nil {
+	positionals, err := parseInterspersed(fs, args)
+	if err != nil {
 		return 2
 	}
-	name := joinArgs(fs.Args())
+	name := joinArgs(positionals)
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "wgpeer client kill: a peer name is required")
 		return 2
@@ -300,8 +318,53 @@ func clientKill(args []string) int {
 	return 0
 }
 
+// parseInterspersed parses flags that may appear before or after the positional
+// arguments, returning the positionals. The stdlib flag package stops at the
+// first non-flag token; this loops past each positional and resumes parsing, so
+// the documented "add <name> [flags]" syntax works (spec §6) — important when
+// typing on a phone where flag order is easy to get wrong.
+func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positionals []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return positionals, nil
+		}
+		positionals = append(positionals, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+}
+
 // joinArgs joins positional args with spaces so an unquoted multi-word peer
 // name still works (a quoted "для Васи" arrives as one arg either way).
 func joinArgs(args []string) string {
 	return strings.Join(args, " ")
+}
+
+// resolveTerminalQR decides whether to draw the terminal QR. Default (auto)
+// shows it only when stdout is a TTY and no PNG was requested, so
+// `wgpeer client add … > foo.conf` yields just the config; always|never override.
+func resolveTerminalQR(mode string, pngRequested, stdoutTTY bool) (bool, error) {
+	switch mode {
+	case "always":
+		return true, nil
+	case "never":
+		return false, nil
+	case "auto":
+		return !pngRequested && stdoutTTY, nil
+	default:
+		return false, fmt.Errorf("--qr must be auto, always or never")
+	}
+}
+
+// isTerminal reports whether f is attached to a character device (a terminal).
+// Stdlib-only isatty — keeps the client dependency-free (spec §14).
+func isTerminal(f *os.File) bool {
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return st.Mode()&os.ModeCharDevice != 0
 }
