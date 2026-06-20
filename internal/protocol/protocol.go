@@ -23,12 +23,19 @@ const (
 // Request is the single request envelope sent on stdin (client → server).
 //
 //	{ "op":"add", "name":"для Васи", "public_key":"<base64>",
-//	  "preshared_key":"<base64|null>" }
+//	  "preshared_key":"<base64|null>", "endpoint":"public" }
+//
+// Endpoint is the requested endpoint menu name. The client still owns the
+// choice, but it is sent so the server can validate it against its menu BEFORE
+// mutating — an unknown name must fail without ever creating a peer. "" selects
+// the default (first menu entry). It is a deliberate, backward-compatible
+// addition over the spec's AddRequest sketch (spec §5, §9).
 type Request struct {
 	Op           string `json:"op"`
 	Name         string `json:"name,omitempty"`
 	PublicKey    string `json:"public_key,omitempty"`
 	PresharedKey string `json:"preshared_key,omitempty"` // "" / null = no PSK
+	Endpoint     string `json:"endpoint,omitempty"`      // "" = default (menu[0])
 }
 
 // Endpoint is one entry of the server's vantage-dependent endpoint menu.

@@ -52,10 +52,11 @@ func TestIntegrationApply(t *testing.T) {
 	}
 
 	s := New(&config.ServerConfig{
-		Iface:    testIface,
-		ConfPath: confPath,
-		Subnet:   "10.30.0.0/24",
-		Reserved: []string{"10.30.0.1"},
+		Iface:     testIface,
+		ConfPath:  confPath,
+		Subnet:    "10.30.0.0/24",
+		Reserved:  []string{"10.30.0.1"},
+		Endpoints: []protocol.Endpoint{{Name: "test", Addr: "127.0.0.1:51999"}},
 	})
 
 	clientPriv, _ := wgkey.GeneratePrivateKey()

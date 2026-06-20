@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/akovalenko/wgpeer/internal/config"
@@ -53,6 +54,12 @@ func (s *Server) Add(req protocol.Request) protocol.AddResponse {
 		if _, err := wgkey.Decode(req.PresharedKey); err != nil {
 			return protocol.AddResponse{Status: badRequest("preshared_key: " + err.Error())}
 		}
+	}
+	// Validate the endpoint against the menu BEFORE any mutation, so a typo'd
+	// or absent endpoint never leaves an orphaned peer behind (it would also
+	// fail later in client assembly with the key lost).
+	if errResp := s.validateEndpoint(req.Endpoint); errResp != nil {
+		return protocol.AddResponse{Status: *errResp}
 	}
 	subnet, reserved, errResp := s.network()
 	if errResp != nil {
@@ -183,6 +190,31 @@ func (s *Server) commit(conf *wgconf.Conf) *protocol.Status {
 		}
 	}
 	return nil
+}
+
+// validateEndpoint checks the requested endpoint name against the server's menu
+// before any mutation. An empty name selects the default (first entry). A server
+// with no endpoints cannot produce a usable client config, so that is also
+// rejected here rather than after the peer is written.
+func (s *Server) validateEndpoint(name string) *protocol.Status {
+	if len(s.Cfg.Endpoints) == 0 {
+		st := internal("server has no endpoints configured")
+		return &st
+	}
+	if name == "" {
+		return nil // default = menu[0]
+	}
+	for _, e := range s.Cfg.Endpoints {
+		if e.Name == name {
+			return nil
+		}
+	}
+	names := make([]string, len(s.Cfg.Endpoints))
+	for i, e := range s.Cfg.Endpoints {
+		names[i] = e.Name
+	}
+	st := badRequest(fmt.Sprintf("unknown endpoint %q (available: %s)", name, strings.Join(names, ", ")))
+	return &st
 }
 
 // network parses the subnet and reserved addresses from config.

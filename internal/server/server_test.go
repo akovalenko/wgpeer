@@ -151,6 +151,29 @@ func TestServerRejectsNameInjection(t *testing.T) {
 	}
 }
 
+func TestServerRejectsUnknownEndpoint(t *testing.T) {
+	s, confPath, _ := newTestServer(t)
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := s.Add(protocol.Request{Op: protocol.OpAdd, Name: "x", PublicKey: clientPub(t), Endpoint: "nope"})
+	if r.Error != protocol.ErrBadRequest {
+		t.Fatalf("unknown endpoint error = %q, want bad_request", r.Error)
+	}
+	after, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("conf must be untouched after a rejected endpoint (no orphaned peer)")
+	}
+	// A valid endpoint name (and the default empty) still works.
+	if r := s.Add(protocol.Request{Op: protocol.OpAdd, Name: "y", PublicKey: clientPub(t), Endpoint: "public"}); !r.OK {
+		t.Fatalf("valid endpoint add: %+v", r.Status)
+	}
+}
+
 func TestServerNoFreeIP(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	s.Cfg.Subnet = "10.20.0.0/30" // usable .1 .2

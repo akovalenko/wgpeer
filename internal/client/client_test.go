@@ -121,7 +121,7 @@ func TestClientAddAssembly(t *testing.T) {
 }
 
 func TestClientAddOptions(t *testing.T) {
-	cl, _, _ := inProcess(t)
+	cl, s, _ := inProcess(t)
 
 	// --no-psk: no PresharedKey line.
 	cfgText, _, err := cl.Add(AddOptions{Name: "nopsk", NoPSK: true})
@@ -150,9 +150,16 @@ func TestClientAddOptions(t *testing.T) {
 		t.Errorf("--endpoint not honoured:\n%s", cfgText)
 	}
 
-	// Unknown endpoint is an error.
+	// Unknown endpoint is an error — and crucially the peer must NOT have been
+	// created (validated server-side before any mutation), so the key is not lost.
 	if _, _, err := cl.Add(AddOptions{Name: "bad", Endpoint: "nope"}); err == nil {
 		t.Errorf("unknown endpoint should error")
+	}
+	lr := s.List()
+	for _, p := range lr.Peers {
+		if p.Name == "bad" {
+			t.Errorf("peer was created despite an unknown endpoint: %+v", p)
+		}
 	}
 }
 
