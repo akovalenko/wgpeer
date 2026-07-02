@@ -465,7 +465,12 @@ func resolveClient(server, iface string) (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client.NewSSH(entry.SSH, entry.Sudo, ifc), nil
+	return client.NewSSH(client.SSHConfig{
+		Command:    entry.SSHCommand,
+		Target:     entry.SSH,
+		Sudo:       entry.Sudo,
+		WgpeerPath: entry.WgpeerPath,
+	}, ifc), nil
 }
 
 func clientAdd(args []string) int {

@@ -9,8 +9,14 @@ ssh    = "anton@vpn.example" # ssh target (or an alias from ~/.ssh/config)
 sudo   = true               # prefix the remote command with sudo
 ifaces = ["wg0", "wg1"]     # available interfaces; the first is the default
 
+# A host that needs a non-default ssh config and a wgpeer not on the login PATH.
+# ssh_command overrides the bare `ssh` (given as an array — no shell splitting):
+# the target and remote command are appended to it. wgpeer_path is the server-side
+# binary. Both are optional; unset ⇒ `ssh <target> … wgpeer …`.
 # [[server]]
-# name   = "work"
-# ssh    = "work-vpn"
-# sudo   = true
-# ifaces = ["wg0"]
+# name        = "work"
+# ssh         = "work-vpn"
+# ssh_command = ["ssh", "-F", "/home/me/.ssh/work_config"]
+# wgpeer_path = "/usr/local/bin/wgpeer"
+# sudo        = true
+# ifaces      = ["wg0"]

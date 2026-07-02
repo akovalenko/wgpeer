@@ -19,27 +19,64 @@ import (
 // sending the request JSON on stdin and returning its stdout; it is a field so
 // tests can substitute an in-process server.
 type Client struct {
-	SSHTarget string
-	Sudo      bool
-	Iface     string
-	Exec      func(op string, reqJSON []byte) (stdout []byte, err error)
+	SSHCommand []string // ssh invocation + flags; empty → ["ssh"]
+	SSHTarget  string
+	Sudo       bool
+	WgpeerPath string // remote wgpeer binary; empty → "wgpeer" (PATH)
+	Iface      string
+	Exec       func(op string, reqJSON []byte) (stdout []byte, err error)
+}
+
+// SSHConfig describes how to reach a server's wgpeer over ssh. Command and
+// WgpeerPath are optional (see config.ServerEntry); zero values reproduce the
+// plain `ssh <target> wgpeer …` invocation.
+type SSHConfig struct {
+	Command    []string
+	Target     string
+	Sudo       bool
+	WgpeerPath string
 }
 
 // NewSSH builds a Client whose Exec shells out to the system ssh (honouring
-// ~/.ssh/config, agent, aliases — spec §14).
-func NewSSH(sshTarget string, sudo bool, iface string) *Client {
-	c := &Client{SSHTarget: sshTarget, Sudo: sudo, Iface: iface}
+// ~/.ssh/config, agent, aliases — spec §14), plus any per-server ssh-command or
+// remote-path overrides.
+func NewSSH(cfg SSHConfig, iface string) *Client {
+	c := &Client{
+		SSHCommand: cfg.Command,
+		SSHTarget:  cfg.Target,
+		Sudo:       cfg.Sudo,
+		WgpeerPath: cfg.WgpeerPath,
+		Iface:      iface,
+	}
 	c.Exec = c.sshExec
 	return c
 }
 
-func (c *Client) sshExec(op string, reqJSON []byte) ([]byte, error) {
-	remote := []string{}
-	if c.Sudo {
-		remote = append(remote, "sudo")
+// sshArgv builds the full command line: the ssh invocation, the target, then the
+// remote `[sudo] <wgpeer> server --iface <iface> <op>`. Split out from sshExec so
+// the argv can be unit-tested without spawning ssh. SSHCommand defaults to ["ssh"]
+// and WgpeerPath to "wgpeer" (found on the login PATH).
+func (c *Client) sshArgv(op string) []string {
+	ssh := c.SSHCommand
+	if len(ssh) == 0 {
+		ssh = []string{"ssh"}
 	}
-	remote = append(remote, "wgpeer", "server", "--iface", c.Iface, op)
-	cmd := exec.Command("ssh", append([]string{c.SSHTarget}, remote...)...)
+	wgpeer := c.WgpeerPath
+	if wgpeer == "" {
+		wgpeer = "wgpeer"
+	}
+	argv := append([]string{}, ssh...) // fresh slice; never alias c.SSHCommand
+	argv = append(argv, c.SSHTarget)
+	if c.Sudo {
+		argv = append(argv, "sudo")
+	}
+	argv = append(argv, wgpeer, "server", "--iface", c.Iface, op)
+	return argv
+}
+
+func (c *Client) sshExec(op string, reqJSON []byte) ([]byte, error) {
+	argv := c.sshArgv(op)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

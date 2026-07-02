@@ -77,11 +77,20 @@ func LoadServer(iface string) (*ServerConfig, error) {
 }
 
 // ServerEntry is one [[server]] in the client menu (spec §4.2).
+//
+// SSHCommand and WgpeerPath are optional overrides for hosts that need them:
+// SSHCommand replaces the bare `ssh` invocation (e.g. ["ssh", "-F", "cfg"] to
+// point at a non-default ssh config), and WgpeerPath is the path to wgpeer on the
+// server when it is not on the login PATH (e.g. "/usr/local/bin/wgpeer"). Both are
+// unset by default, reproducing the plain `ssh <target> wgpeer …` behaviour. An
+// array (not a shell string) sidesteps quoting/splitting ambiguity.
 type ServerEntry struct {
-	Name   string   `toml:"name"`
-	SSH    string   `toml:"ssh"`
-	Sudo   bool     `toml:"sudo"`
-	Ifaces []string `toml:"ifaces"`
+	Name       string   `toml:"name"`
+	SSH        string   `toml:"ssh"`
+	SSHCommand []string `toml:"ssh_command"` // "" → ["ssh"]
+	Sudo       bool     `toml:"sudo"`
+	WgpeerPath string   `toml:"wgpeer_path"` // "" → "wgpeer" (PATH)
+	Ifaces     []string `toml:"ifaces"`
 }
 
 // ClientConfig is ~/.config/wgpeer/client.toml — the menu of servers and their
