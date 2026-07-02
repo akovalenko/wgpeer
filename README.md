@@ -21,6 +21,13 @@ One binary, two modes (a shared `protocol` package keeps them in lockstep):
   generates the private key **locally** (it never leaves the machine), drives the
   server over ssh, assembles the client config, and draws the QR.
 
+Two server-side subcommands manage a whole interface rather than its peers:
+
+- `wgpeer server provide <wgN> …` / `wgpeer server remove <wgN>` — bootstrap or
+  tear down an interface: generate (or delete) the `.conf` + sidecar and enable
+  (or disable) `wg-quick`. Flag-driven admin commands run on the server; a human
+  summary goes to stderr and a JSON response to stdout.
+
 `ssh` is the only authorization boundary — there is no daemon, UI, or token.
 
 ## Install
@@ -37,7 +44,8 @@ Server side:
 1. Put the binary at e.g. `/usr/local/bin/wgpeer`.
 2. Create a per-interface config: `/etc/wgpeer/wg0.toml`
    (see [`examples/wg0.toml`](examples/wg0.toml)). No file for an interface ⇒
-   wgpeer refuses to operate on it.
+   wgpeer refuses to operate on it. Or let `wgpeer server provide` (below)
+   generate both the `.conf` and this sidecar for you.
 3. Scope sudo to `wgpeer server` (see [`examples/wgpeer.sudoers`](examples/wgpeer.sudoers)).
 4. The interface's `[Interface]` must contain `PrivateKey` — the server derives
    and advertises its own public key from it.
@@ -74,6 +82,46 @@ The peer **name is a label, not an identity** — the real identity is the publi
 key. `kill` resolves a name to its key; adding a duplicate name fails with
 `name_taken`. Names must be a single line (no control characters) and carry no
 leading/trailing whitespace.
+
+## Provisioning an interface (server side)
+
+Rather than hand-writing the sidecar and the wg `.conf`, bootstrap both with
+`provide`; the inverse, `remove`, tears them down. Both run **on the server**
+(under `sudo`), are flag-driven (no stdin JSON), and print a human summary on
+stderr with a JSON response on stdout.
+
+```sh
+# create wg0: pick the peer pool, autodetect the public endpoint, bring it up
+sudo wgpeer server provide wg0 --net 172.19.0.0/16
+
+sudo wgpeer server provide wg0 --net 10.8.0.0/24 --endpoint vpn.example.com:51820
+sudo wgpeer server provide wg0 --net 172.19.0.0/16 --allowed-ips subnet  # split-tunnel
+sudo wgpeer server provide wg0 --net 172.19.0.0/16 --dns 1.1.1.1 --keepalive 25
+sudo wgpeer server provide wg0 --net 172.19.0.0/16 --no-up                # write files only
+```
+
+`provide` generates the server keypair, writes `/etc/wireguard/<iface>.conf`
+(0600) and the `/etc/wgpeer/<iface>.toml` sidecar, then — unless `--no-up` —
+runs `systemctl enable --now wg-quick@<iface>`. It refuses to touch an interface
+whose conf or sidecar already exists. Defaults: a random high `ListenPort`, the
+first host of `--net` as the server address, the public IPv4(s) autodetected as
+the endpoint menu, full-tunnel `AllowedIPs`, and DNS/MTU/keepalive left unset
+(`--allowed-ips subnet` gives split-tunnel to `--net` only).
+
+```sh
+# tear wg0 back down: stop & disable wg-quick, delete conf + sidecar
+sudo wgpeer server remove wg0
+sudo wgpeer server remove wg0 --yes         # skip the confirmation prompt
+sudo wgpeer server remove wg0 --no-backup   # do not keep a .conf backup
+```
+
+`remove` is interactive: it prints exactly what it will destroy and reads a y/N
+confirmation (a non-terminal stdin without `--yes` is refused rather than acted
+on blindly). Because the server private key lives **only** in the `.conf`, the
+conf is copied to `<conf>.bak-YYYYMMDD` (0600) before deletion — `--no-backup`
+opts out. Stopping/disabling `wg-quick` and the deletes are best-effort: a unit
+already down or a file already gone is noted, not fatal, so a partial prior
+teardown still converges.
 
 ## Configuration
 
