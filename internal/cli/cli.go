@@ -51,12 +51,12 @@ func usage() {
 
   wgpeer server provide <wgN> --net <CIDR> [--listen-port N] [--address IP]
                                [--endpoint HOST] [--allowed-ips LIST] [--dns LIST]
-                               [--mtu N] [--no-up]
+                               [--mtu N] [--keepalive N] [--no-up]
       Bootstrap a new interface: generate a key, write /etc/wireguard/<wgN>.conf
       and the /etc/wgpeer/<wgN>.toml sidecar, then (unless --no-up) enable and
       bring it up via wg-quick. --allowed-ips defaults to full-tunnel ("subnet"
-      = split-tunnel to --net); --dns/--mtu are unset unless given. JSON on
-      stdout, human summary on stderr.
+      = split-tunnel to --net); --dns/--mtu/--keepalive are unset unless given.
+      JSON on stdout, human summary on stderr.
 
   wgpeer client <cmd> [flags] [name]
       add  <name> [--server S] [--iface I] [--endpoint NAME] [--no-psk]
@@ -89,6 +89,16 @@ func serverMain(args []string) int {
 	op := rest[0]
 	if *iface == "" {
 		return emit(protocol.Status{OK: false, Error: protocol.ErrBadRequest, Message: "--iface is required"})
+	}
+
+	// add/list/kill read a JSON request on stdin; they are meant to be driven by
+	// `wgpeer client` over ssh (a pipe), not typed at a terminal. Refuse an
+	// interactive stdin so a hand-run does not silently hang on a blocking read.
+	if stdinIsInteractive() {
+		fmt.Fprintf(os.Stderr, "wgpeer server %s: this is the headless half — normally `wgpeer client %s` drives it over ssh, feeding a JSON request on stdin. Refusing to read from a terminal.\n", op, op)
+		fmt.Fprintln(os.Stderr, "If you are poking it by hand, pipe the request in — yes, a genuine useless use of cat:")
+		fmt.Fprintf(os.Stderr, "    echo '{\"op\":\"%s\"}' | wgpeer server --iface %s %s\n", op, *iface, op)
+		return 2
 	}
 
 	cfg, err := config.LoadServer(*iface)
@@ -133,6 +143,7 @@ func provideMain(args []string) int {
 	allowedIPs := fs.String("allowed-ips", "0.0.0.0/0,::/0", `AllowedIPs pushed to clients: a CIDR list, or "subnet" for split-tunnel to --net only (default: full-tunnel)`)
 	dnsFlag := fs.String("dns", "", "comma-separated DNS servers pushed to clients (default: unset — client keeps its own)")
 	mtu := fs.Int("mtu", 0, "client MTU pushed to clients (default: unset — wg-quick derives it)")
+	keepalive := fs.Int("keepalive", 0, "client PersistentKeepalive seconds (default: unset — set e.g. 25 behind NAT)")
 	noUp := fs.Bool("no-up", false, "only write the config files; do not enable/bring up the interface")
 	positionals, err := parseInterspersed(fs, args)
 	if err != nil {
@@ -159,6 +170,9 @@ func provideMain(args []string) int {
 	if *mtu < 0 {
 		return emitProvide(provideBadRequest(fmt.Sprintf("--mtu %d must be positive", *mtu)))
 	}
+	if *keepalive < 0 {
+		return emitProvide(provideBadRequest(fmt.Sprintf("--keepalive %d must be positive", *keepalive)))
+	}
 	opts := server.ProvideOptions{
 		Iface:      iface,
 		Subnet:     subnet,
@@ -167,6 +181,7 @@ func provideMain(args []string) int {
 		AllowedIPs: allowed,
 		DNS:        splitCSV(*dnsFlag),
 		MTU:        *mtu,
+		Keepalive:  *keepalive,
 		Up:         !*noUp,
 	}
 	if *address != "" {
@@ -219,6 +234,9 @@ func printProvideSummary(w io.Writer, r protocol.ProvideResponse) {
 	if r.MTU > 0 {
 		fmt.Fprintf(w, "  mtu:         %d\n", r.MTU)
 	}
+	if r.PersistentKeepalive > 0 {
+		fmt.Fprintf(w, "  keepalive:   %d\n", r.PersistentKeepalive)
+	}
 	fmt.Fprintf(w, "  public key:  %s\n", r.ServerPublicKey)
 	for _, e := range r.Endpoints {
 		fmt.Fprintf(w, "  endpoint:    %s → %s\n", e.Name, e.Addr)
@@ -230,6 +248,19 @@ func printProvideSummary(w io.Writer, r protocol.ProvideResponse) {
 	} else {
 		fmt.Fprintf(w, "  enabled:     no — bring up with: systemctl enable --now wg-quick@%s\n", r.Iface)
 	}
+}
+
+// stdinIsInteractive reports whether stdin is a terminal (no piped request).
+// A char device (tty) reads as interactive; a pipe or regular file — the client
+// over ssh, or a shell redirect — does not, so the wrapper path is never
+// blocked. (A `< /dev/null` redirect also reads as a char device, but the
+// advised workaround is to pipe input, which is correctly detected.)
+func stdinIsInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // readRequest reads an optional JSON request from stdin (list sends none).

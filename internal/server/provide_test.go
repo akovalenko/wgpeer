@@ -118,13 +118,16 @@ func TestProvide_writesConfAndSidecar(t *testing.T) {
 	if len(cfg.Reserved) != 1 || cfg.Reserved[0] != "172.19.0.1" {
 		t.Errorf("sidecar reserved = %v, want [172.19.0.1]", cfg.Reserved)
 	}
-	if cfg.Template.PersistentKeepalive != 25 || !cfg.Template.PSKDefault {
-		t.Errorf("sidecar template defaults wrong: %+v", cfg.Template)
+	if !cfg.Template.PSKDefault {
+		t.Errorf("psk_default should be true by default, got %+v", cfg.Template)
 	}
-	// DNS and MTU default to unset (the client omits the lines); AllowedIPs
-	// defaults to full-tunnel.
+	// DNS, MTU, and keepalive default to unset (the client omits the lines);
+	// AllowedIPs defaults to full-tunnel.
 	if cfg.Template.MTU != 0 {
 		t.Errorf("mtu should be unset by default, got %d", cfg.Template.MTU)
+	}
+	if cfg.Template.PersistentKeepalive != 0 {
+		t.Errorf("keepalive should be unset by default, got %d", cfg.Template.PersistentKeepalive)
 	}
 	if len(cfg.Template.DNS) != 0 {
 		t.Errorf("dns should be unset by default, got %v", cfg.Template.DNS)
@@ -146,14 +149,15 @@ func TestProvide_customTemplate(t *testing.T) {
 		AllowedIPs: []string{"172.19.0.0/16"},
 		DNS:        []string{"1.1.1.1", "1.0.0.1"},
 		MTU:        1420,
+		Keepalive:  25,
 		WGDir:      wgDir,
 		SidecarDir: sidecarDir,
 	})
 	if !resp.OK {
 		t.Fatalf("provide failed: %s", resp.Message)
 	}
-	if !slices.Equal(resp.AllowedIPs, []string{"172.19.0.0/16"}) || !slices.Equal(resp.DNS, []string{"1.1.1.1", "1.0.0.1"}) || resp.MTU != 1420 {
-		t.Errorf("response template fields wrong: allowed=%v dns=%v mtu=%d", resp.AllowedIPs, resp.DNS, resp.MTU)
+	if !slices.Equal(resp.AllowedIPs, []string{"172.19.0.0/16"}) || !slices.Equal(resp.DNS, []string{"1.1.1.1", "1.0.0.1"}) || resp.MTU != 1420 || resp.PersistentKeepalive != 25 {
+		t.Errorf("response template fields wrong: allowed=%v dns=%v mtu=%d keepalive=%d", resp.AllowedIPs, resp.DNS, resp.MTU, resp.PersistentKeepalive)
 	}
 	cfg, err := config.LoadServer("wg0")
 	if err != nil {
@@ -168,6 +172,9 @@ func TestProvide_customTemplate(t *testing.T) {
 	if cfg.Template.MTU != 1420 {
 		t.Errorf("sidecar mtu = %d, want 1420", cfg.Template.MTU)
 	}
+	if cfg.Template.PersistentKeepalive != 25 {
+		t.Errorf("sidecar keepalive = %d, want 25", cfg.Template.PersistentKeepalive)
+	}
 }
 
 func TestResolveAllowedIPs(t *testing.T) {
@@ -178,7 +185,7 @@ func TestResolveAllowedIPs(t *testing.T) {
 		err  bool
 	}{
 		{"0.0.0.0/0,::/0", []string{"0.0.0.0/0", "::/0"}, false}, // full-tunnel default
-		{"subnet", []string{"172.19.0.0/16"}, false},            // shortcut
+		{"subnet", []string{"172.19.0.0/16"}, false},             // shortcut
 		{"10.0.0.0/8, 192.168.0.0/16", []string{"10.0.0.0/8", "192.168.0.0/16"}, false},
 		{"nonsense", nil, true},
 		{"10.0.0.1", nil, true}, // bare IP, not a prefix
@@ -385,13 +392,13 @@ func TestIsPublicV4(t *testing.T) {
 	}{
 		{"185.18.221.124", true},
 		{"203.0.113.9", true},
-		{"10.0.0.1", false},        // RFC1918
-		{"172.21.0.1", false},      // RFC1918
-		{"192.168.231.7", false},   // RFC1918
-		{"127.0.0.1", false},       // loopback
-		{"169.254.1.1", false},     // link-local
-		{"0.0.0.0", false},         // unspecified
-		{"2a13:2c0::475c", false},  // IPv6 (v1 is v4-only here)
+		{"10.0.0.1", false},       // RFC1918
+		{"172.21.0.1", false},     // RFC1918
+		{"192.168.231.7", false},  // RFC1918
+		{"127.0.0.1", false},      // loopback
+		{"169.254.1.1", false},    // link-local
+		{"0.0.0.0", false},        // unspecified
+		{"2a13:2c0::475c", false}, // IPv6 (v1 is v4-only here)
 	}
 	for _, tc := range cases {
 		if got := isPublicV4(net.ParseIP(tc.ip)); got != tc.want {

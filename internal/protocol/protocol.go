@@ -104,16 +104,17 @@ type KillResponse struct {
 // stderr summary — can see the generated address, port, key, and endpoint menu.
 type ProvideResponse struct {
 	Status
-	Iface           string     `json:"iface,omitempty"`
-	ConfPath        string     `json:"conf_path,omitempty"`
-	SidecarPath     string     `json:"sidecar_path,omitempty"`
-	Subnet          string     `json:"subnet,omitempty"`
-	Address         string     `json:"address,omitempty"` // server address with prefix, e.g. 172.19.0.1/16
-	ListenPort      int        `json:"listen_port,omitempty"`
-	ServerPublicKey string     `json:"server_public_key,omitempty"`
-	Endpoints       []Endpoint `json:"endpoints,omitempty"`
-	AllowedIPs      []string   `json:"allowed_ips,omitempty"` // pushed to clients (full-tunnel default)
-	DNS             []string   `json:"dns,omitempty"`         // pushed to clients; empty = unset
-	MTU             int        `json:"mtu,omitempty"`         // pushed to clients; 0 = unset
-	Enabled         bool       `json:"enabled"` // systemctl enable --now wg-quick@<iface> ran
+	Iface               string     `json:"iface,omitempty"`
+	ConfPath            string     `json:"conf_path,omitempty"`
+	SidecarPath         string     `json:"sidecar_path,omitempty"`
+	Subnet              string     `json:"subnet,omitempty"`
+	Address             string     `json:"address,omitempty"` // server address with prefix, e.g. 172.19.0.1/16
+	ListenPort          int        `json:"listen_port,omitempty"`
+	ServerPublicKey     string     `json:"server_public_key,omitempty"`
+	Endpoints           []Endpoint `json:"endpoints,omitempty"`
+	AllowedIPs          []string   `json:"allowed_ips,omitempty"`          // pushed to clients (full-tunnel default)
+	DNS                 []string   `json:"dns,omitempty"`                  // pushed to clients; empty = unset
+	MTU                 int        `json:"mtu,omitempty"`                  // pushed to clients; 0 = unset
+	PersistentKeepalive int        `json:"persistent_keepalive,omitempty"` // pushed to clients; 0 = unset
+	Enabled             bool       `json:"enabled"`                        // systemctl enable --now wg-quick@<iface> ran
 }
