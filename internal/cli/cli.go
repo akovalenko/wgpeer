@@ -50,10 +50,13 @@ func usage() {
       stdin and writes a JSON response on stdout.
 
   wgpeer server provide <wgN> --net <CIDR> [--listen-port N] [--address IP]
-                               [--endpoint HOST] [--no-up]
+                               [--endpoint HOST] [--allowed-ips LIST] [--dns LIST]
+                               [--mtu N] [--no-up]
       Bootstrap a new interface: generate a key, write /etc/wireguard/<wgN>.conf
       and the /etc/wgpeer/<wgN>.toml sidecar, then (unless --no-up) enable and
-      bring it up via wg-quick. JSON on stdout, human summary on stderr.
+      bring it up via wg-quick. --allowed-ips defaults to full-tunnel ("subnet"
+      = split-tunnel to --net); --dns/--mtu are unset unless given. JSON on
+      stdout, human summary on stderr.
 
   wgpeer client <cmd> [flags] [name]
       add  <name> [--server S] [--iface I] [--endpoint NAME] [--no-psk]
@@ -127,6 +130,9 @@ func provideMain(args []string) int {
 	listenPort := fs.Int("listen-port", 0, "UDP listen port (default: a random high port)")
 	address := fs.String("address", "", "server's own address inside --net (default: first host)")
 	endpoint := fs.String("endpoint", "", "endpoint host or host:port clients dial (default: auto-detect public IPv4)")
+	allowedIPs := fs.String("allowed-ips", "0.0.0.0/0,::/0", `AllowedIPs pushed to clients: a CIDR list, or "subnet" for split-tunnel to --net only (default: full-tunnel)`)
+	dnsFlag := fs.String("dns", "", "comma-separated DNS servers pushed to clients (default: unset — client keeps its own)")
+	mtu := fs.Int("mtu", 0, "client MTU pushed to clients (default: unset — wg-quick derives it)")
 	noUp := fs.Bool("no-up", false, "only write the config files; do not enable/bring up the interface")
 	positionals, err := parseInterspersed(fs, args)
 	if err != nil {
@@ -146,11 +152,21 @@ func provideMain(args []string) int {
 			"bad --net %q: %v; give a full CIDR like 172.19.0.0/16 (shorthand like 172.19/16 is not yet supported)",
 			*netFlag, err)))
 	}
+	allowed, err := server.ResolveAllowedIPs(*allowedIPs, subnet)
+	if err != nil {
+		return emitProvide(provideBadRequest(err.Error()))
+	}
+	if *mtu < 0 {
+		return emitProvide(provideBadRequest(fmt.Sprintf("--mtu %d must be positive", *mtu)))
+	}
 	opts := server.ProvideOptions{
 		Iface:      iface,
 		Subnet:     subnet,
 		ListenPort: *listenPort,
 		Endpoint:   *endpoint,
+		AllowedIPs: allowed,
+		DNS:        splitCSV(*dnsFlag),
+		MTU:        *mtu,
 		Up:         !*noUp,
 	}
 	if *address != "" {
@@ -174,6 +190,18 @@ func provideBadRequest(msg string) protocol.ProvideResponse {
 	return protocol.ProvideResponse{Status: protocol.Status{OK: false, Error: protocol.ErrBadRequest, Message: msg}}
 }
 
+// splitCSV splits a comma-separated flag value into trimmed, non-empty items;
+// an empty input yields nil (so an unset --dns stays unset).
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // printProvideSummary renders the human-readable half of a provide result.
 func printProvideSummary(w io.Writer, r protocol.ProvideResponse) {
 	if !r.OK {
@@ -184,6 +212,13 @@ func printProvideSummary(w io.Writer, r protocol.ProvideResponse) {
 	fmt.Fprintf(w, "  subnet:      %s\n", r.Subnet)
 	fmt.Fprintf(w, "  address:     %s\n", r.Address)
 	fmt.Fprintf(w, "  listen port: %d\n", r.ListenPort)
+	fmt.Fprintf(w, "  allowed-ips: %s\n", strings.Join(r.AllowedIPs, ", "))
+	if len(r.DNS) > 0 {
+		fmt.Fprintf(w, "  dns:         %s\n", strings.Join(r.DNS, ", "))
+	}
+	if r.MTU > 0 {
+		fmt.Fprintf(w, "  mtu:         %d\n", r.MTU)
+	}
 	fmt.Fprintf(w, "  public key:  %s\n", r.ServerPublicKey)
 	for _, e := range r.Endpoints {
 		fmt.Fprintf(w, "  endpoint:    %s → %s\n", e.Name, e.Addr)

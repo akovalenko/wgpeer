@@ -112,5 +112,8 @@ type ProvideResponse struct {
 	ListenPort      int        `json:"listen_port,omitempty"`
 	ServerPublicKey string     `json:"server_public_key,omitempty"`
 	Endpoints       []Endpoint `json:"endpoints,omitempty"`
+	AllowedIPs      []string   `json:"allowed_ips,omitempty"` // pushed to clients (full-tunnel default)
+	DNS             []string   `json:"dns,omitempty"`         // pushed to clients; empty = unset
+	MTU             int        `json:"mtu,omitempty"`         // pushed to clients; 0 = unset
 	Enabled         bool       `json:"enabled"` // systemctl enable --now wg-quick@<iface> ran
 }

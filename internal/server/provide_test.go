@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -117,11 +118,88 @@ func TestProvide_writesConfAndSidecar(t *testing.T) {
 	if len(cfg.Reserved) != 1 || cfg.Reserved[0] != "172.19.0.1" {
 		t.Errorf("sidecar reserved = %v, want [172.19.0.1]", cfg.Reserved)
 	}
-	if cfg.Template.PersistentKeepalive != 25 || cfg.Template.MTU != 1340 || !cfg.Template.PSKDefault {
+	if cfg.Template.PersistentKeepalive != 25 || !cfg.Template.PSKDefault {
 		t.Errorf("sidecar template defaults wrong: %+v", cfg.Template)
+	}
+	// DNS and MTU default to unset (the client omits the lines); AllowedIPs
+	// defaults to full-tunnel.
+	if cfg.Template.MTU != 0 {
+		t.Errorf("mtu should be unset by default, got %d", cfg.Template.MTU)
+	}
+	if len(cfg.Template.DNS) != 0 {
+		t.Errorf("dns should be unset by default, got %v", cfg.Template.DNS)
+	}
+	if !slices.Equal(cfg.Template.AllowedIPs, []string{"0.0.0.0/0", "::/0"}) {
+		t.Errorf("allowed_ips = %v, want full-tunnel", cfg.Template.AllowedIPs)
 	}
 	if len(cfg.Endpoints) != 1 || cfg.Endpoints[0].Name != "public" || cfg.Endpoints[0].Addr != wantAddr {
 		t.Errorf("sidecar endpoints = %+v", cfg.Endpoints)
+	}
+}
+
+func TestProvide_customTemplate(t *testing.T) {
+	wgDir, sidecarDir := provideDirs(t)
+	resp := Provide(ProvideOptions{
+		Iface:      "wg0",
+		Subnet:     netip.MustParsePrefix("172.19.0.0/16"),
+		Endpoint:   "h",
+		AllowedIPs: []string{"172.19.0.0/16"},
+		DNS:        []string{"1.1.1.1", "1.0.0.1"},
+		MTU:        1420,
+		WGDir:      wgDir,
+		SidecarDir: sidecarDir,
+	})
+	if !resp.OK {
+		t.Fatalf("provide failed: %s", resp.Message)
+	}
+	if !slices.Equal(resp.AllowedIPs, []string{"172.19.0.0/16"}) || !slices.Equal(resp.DNS, []string{"1.1.1.1", "1.0.0.1"}) || resp.MTU != 1420 {
+		t.Errorf("response template fields wrong: allowed=%v dns=%v mtu=%d", resp.AllowedIPs, resp.DNS, resp.MTU)
+	}
+	cfg, err := config.LoadServer("wg0")
+	if err != nil {
+		t.Fatalf("load sidecar: %v", err)
+	}
+	if !slices.Equal(cfg.Template.AllowedIPs, []string{"172.19.0.0/16"}) {
+		t.Errorf("sidecar allowed_ips = %v", cfg.Template.AllowedIPs)
+	}
+	if !slices.Equal(cfg.Template.DNS, []string{"1.1.1.1", "1.0.0.1"}) {
+		t.Errorf("sidecar dns = %v", cfg.Template.DNS)
+	}
+	if cfg.Template.MTU != 1420 {
+		t.Errorf("sidecar mtu = %d, want 1420", cfg.Template.MTU)
+	}
+}
+
+func TestResolveAllowedIPs(t *testing.T) {
+	subnet := netip.MustParsePrefix("172.19.0.0/16")
+	cases := []struct {
+		in   string
+		want []string
+		err  bool
+	}{
+		{"0.0.0.0/0,::/0", []string{"0.0.0.0/0", "::/0"}, false}, // full-tunnel default
+		{"subnet", []string{"172.19.0.0/16"}, false},            // shortcut
+		{"10.0.0.0/8, 192.168.0.0/16", []string{"10.0.0.0/8", "192.168.0.0/16"}, false},
+		{"nonsense", nil, true},
+		{"10.0.0.1", nil, true}, // bare IP, not a prefix
+		{"", nil, true},         // empty
+		{" , ", nil, true},      // all-empty
+	}
+	for _, tc := range cases {
+		got, err := ResolveAllowedIPs(tc.in, subnet)
+		if tc.err {
+			if err == nil {
+				t.Errorf("ResolveAllowedIPs(%q) = %v, want error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ResolveAllowedIPs(%q) error: %v", tc.in, err)
+			continue
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("ResolveAllowedIPs(%q) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 
