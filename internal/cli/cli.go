@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -48,6 +49,12 @@ func usage() {
       Headless privileged half (run under ssh+sudo). Reads a JSON request on
       stdin and writes a JSON response on stdout.
 
+  wgpeer server provide <wgN> --net <CIDR> [--listen-port N] [--address IP]
+                               [--endpoint HOST] [--no-up]
+      Bootstrap a new interface: generate a key, write /etc/wireguard/<wgN>.conf
+      and the /etc/wgpeer/<wgN>.toml sidecar, then (unless --no-up) enable and
+      bring it up via wg-quick. JSON on stdout, human summary on stderr.
+
   wgpeer client <cmd> [flags] [name]
       add  <name> [--server S] [--iface I] [--endpoint NAME] [--no-psk]
                   [--split] [--qr always|never] [--qr-png FILE] [--invert]
@@ -61,6 +68,11 @@ func usage() {
 // --- server mode ---------------------------------------------------------
 
 func serverMain(args []string) int {
+	// `provide` bootstraps a new interface from CLI flags (positional iface, no
+	// stdin JSON), so it is dispatched before the --iface/JSON request path.
+	if len(args) > 0 && args[0] == protocol.OpProvide {
+		return provideMain(args[1:])
+	}
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	iface := fs.String("iface", "", "wireguard interface name (selects /etc/wgpeer/<iface>.toml)")
 	if err := fs.Parse(args); err != nil {
@@ -101,6 +113,87 @@ func serverMain(args []string) int {
 		return emit(r)
 	default:
 		return emit(protocol.Status{OK: false, Error: protocol.ErrBadRequest, Message: "unknown command " + op})
+	}
+}
+
+// provideMain parses `server provide <iface> --net <CIDR> [flags]` and bootstraps
+// the interface. Output is dual: the ProvideResponse as JSON on stdout (for a
+// future `client provide` wrapper) and a human summary on stderr (for a hand
+// run). Genuine flag-syntax errors return exit 2; everything else — including a
+// missing/bad --net — comes back as a JSON response so the wrapper always sees one.
+func provideMain(args []string) int {
+	fs := flag.NewFlagSet("server provide", flag.ContinueOnError)
+	netFlag := fs.String("net", "", "peer address pool as a CIDR, e.g. 172.19.0.0/16 (required)")
+	listenPort := fs.Int("listen-port", 0, "UDP listen port (default: a random high port)")
+	address := fs.String("address", "", "server's own address inside --net (default: first host)")
+	endpoint := fs.String("endpoint", "", "endpoint host or host:port clients dial (default: auto-detect public IPv4)")
+	noUp := fs.Bool("no-up", false, "only write the config files; do not enable/bring up the interface")
+	positionals, err := parseInterspersed(fs, args)
+	if err != nil {
+		return 2
+	}
+	if len(positionals) != 1 {
+		return emitProvide(provideBadRequest("expected exactly one interface name, e.g. `wgpeer server provide wg0 --net 172.19.0.0/16`"))
+	}
+	iface := positionals[0]
+
+	if *netFlag == "" {
+		return emitProvide(provideBadRequest("--net <CIDR> is required (e.g. 172.19.0.0/16)"))
+	}
+	subnet, err := netip.ParsePrefix(*netFlag)
+	if err != nil {
+		return emitProvide(provideBadRequest(fmt.Sprintf(
+			"bad --net %q: %v; give a full CIDR like 172.19.0.0/16 (shorthand like 172.19/16 is not yet supported)",
+			*netFlag, err)))
+	}
+	opts := server.ProvideOptions{
+		Iface:      iface,
+		Subnet:     subnet,
+		ListenPort: *listenPort,
+		Endpoint:   *endpoint,
+		Up:         !*noUp,
+	}
+	if *address != "" {
+		a, err := netip.ParseAddr(*address)
+		if err != nil {
+			return emitProvide(provideBadRequest(fmt.Sprintf("bad --address %q: %v", *address, err)))
+		}
+		opts.Address = a
+	}
+	return emitProvide(server.Provide(opts))
+}
+
+// emitProvide writes the human summary to stderr and the JSON response to stdout,
+// returning the process exit code.
+func emitProvide(resp protocol.ProvideResponse) int {
+	printProvideSummary(os.Stderr, resp)
+	return emit(resp)
+}
+
+func provideBadRequest(msg string) protocol.ProvideResponse {
+	return protocol.ProvideResponse{Status: protocol.Status{OK: false, Error: protocol.ErrBadRequest, Message: msg}}
+}
+
+// printProvideSummary renders the human-readable half of a provide result.
+func printProvideSummary(w io.Writer, r protocol.ProvideResponse) {
+	if !r.OK {
+		fmt.Fprintf(w, "wgpeer server provide: %s\n", r.Message)
+		return
+	}
+	fmt.Fprintf(w, "provisioned %s\n", r.Iface)
+	fmt.Fprintf(w, "  subnet:      %s\n", r.Subnet)
+	fmt.Fprintf(w, "  address:     %s\n", r.Address)
+	fmt.Fprintf(w, "  listen port: %d\n", r.ListenPort)
+	fmt.Fprintf(w, "  public key:  %s\n", r.ServerPublicKey)
+	for _, e := range r.Endpoints {
+		fmt.Fprintf(w, "  endpoint:    %s → %s\n", e.Name, e.Addr)
+	}
+	fmt.Fprintf(w, "  conf:        %s\n", r.ConfPath)
+	fmt.Fprintf(w, "  sidecar:     %s\n", r.SidecarPath)
+	if r.Enabled {
+		fmt.Fprintf(w, "  enabled:     yes (systemctl enable --now wg-quick@%s)\n", r.Iface)
+	} else {
+		fmt.Fprintf(w, "  enabled:     no — bring up with: systemctl enable --now wg-quick@%s\n", r.Iface)
 	}
 }
 
@@ -146,6 +239,8 @@ func okOf(resp any) (bool, bool) {
 	case protocol.ListResponse:
 		return r.OK, true
 	case protocol.KillResponse:
+		return r.OK, true
+	case protocol.ProvideResponse:
 		return r.OK, true
 	default:
 		return false, false

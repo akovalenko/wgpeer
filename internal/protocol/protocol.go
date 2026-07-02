@@ -5,9 +5,10 @@ package protocol
 
 // Operation codes carried in Request.Op and echoed by the server subcommand.
 const (
-	OpAdd  = "add"
-	OpList = "list"
-	OpKill = "kill"
+	OpAdd     = "add"
+	OpList    = "list"
+	OpKill    = "kill"
+	OpProvide = "provide"
 )
 
 // Error codes (spec §5, §11). Returned in Status.Error on failure.
@@ -95,4 +96,21 @@ type ListResponse struct {
 type KillResponse struct {
 	Status
 	Removed *RemovedPeer `json:"removed,omitempty"`
+}
+
+// ProvideResponse is returned for OpProvide: it bootstraps a brand-new interface
+// (fresh [Interface] + sidecar) rather than mutating peers. The fields report
+// what was invented so a future `client provide` wrapper — or a human reading the
+// stderr summary — can see the generated address, port, key, and endpoint menu.
+type ProvideResponse struct {
+	Status
+	Iface           string     `json:"iface,omitempty"`
+	ConfPath        string     `json:"conf_path,omitempty"`
+	SidecarPath     string     `json:"sidecar_path,omitempty"`
+	Subnet          string     `json:"subnet,omitempty"`
+	Address         string     `json:"address,omitempty"` // server address with prefix, e.g. 172.19.0.1/16
+	ListenPort      int        `json:"listen_port,omitempty"`
+	ServerPublicKey string     `json:"server_public_key,omitempty"`
+	Endpoints       []Endpoint `json:"endpoints,omitempty"`
+	Enabled         bool       `json:"enabled"` // systemctl enable --now wg-quick@<iface> ran
 }
