@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -58,6 +59,13 @@ func usage() {
       = split-tunnel to --net); --dns/--mtu/--keepalive are unset unless given.
       JSON on stdout, human summary on stderr.
 
+  wgpeer server remove <wgN> [--yes] [--no-backup]
+      Tear an interface down (inverse of provide): stop and disable wg-quick,
+      then delete /etc/wireguard/<wgN>.conf and /etc/wgpeer/<wgN>.toml. Prompts
+      for confirmation first (needs a terminal on stdin; --yes skips it). Backs
+      up the key-bearing .conf to <conf>.bak-YYYYMMDD unless --no-backup.
+      JSON on stdout, human summary on stderr.
+
   wgpeer client <cmd> [flags] [name]
       add  <name> [--server S] [--iface I] [--endpoint NAME] [--no-psk]
                   [--split] [--qr always|never] [--qr-png FILE] [--invert]
@@ -71,10 +79,14 @@ func usage() {
 // --- server mode ---------------------------------------------------------
 
 func serverMain(args []string) int {
-	// `provide` bootstraps a new interface from CLI flags (positional iface, no
-	// stdin JSON), so it is dispatched before the --iface/JSON request path.
+	// `provide` and `remove` are the whole-interface subcommands: they take a
+	// positional iface and CLI flags (no stdin JSON), so they are dispatched before
+	// the --iface/JSON request path used by add/list/kill.
 	if len(args) > 0 && args[0] == protocol.OpProvide {
 		return provideMain(args[1:])
+	}
+	if len(args) > 0 && args[0] == protocol.OpRemove {
+		return removeMain(args[1:])
 	}
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	iface := fs.String("iface", "", "wireguard interface name (selects /etc/wgpeer/<iface>.toml)")
@@ -250,6 +262,113 @@ func printProvideSummary(w io.Writer, r protocol.ProvideResponse) {
 	}
 }
 
+// removeMain parses `server remove <iface> [--yes] [--no-backup]` and tears the
+// interface down (the inverse of provide). It is interactive by default: it prints
+// what will be destroyed and reads a y/N confirmation from stdin, which is why —
+// unlike the headless add/list/kill — it wants a terminal on stdin. A non-tty
+// stdin without --yes is refused rather than silently proceeding or hanging.
+// Output is dual like provide: RemoveResponse as JSON on stdout, human summary on
+// stderr.
+func removeMain(args []string) int {
+	fs := flag.NewFlagSet("server remove", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "skip the confirmation prompt (for automation)")
+	noBackup := fs.Bool("no-backup", false, "do NOT back up the .conf before deleting it (dangerous: the server private key lives only in the conf)")
+	positionals, err := parseInterspersed(fs, args)
+	if err != nil {
+		return 2
+	}
+	if len(positionals) != 1 {
+		return emitRemove(removeBadRequest("expected exactly one interface name, e.g. `wgpeer server remove wg0`"))
+	}
+	opts := server.RemoveOptions{Iface: positionals[0], NoBackup: *noBackup}
+
+	if !*yes {
+		if !stdinIsInteractive() {
+			return emitRemove(removeBadRequest("removal needs confirmation: pass --yes, or run it interactively with a terminal on stdin"))
+		}
+		// Resolve what will be destroyed and confirm before touching anything.
+		plan, errResp := server.Plan(opts)
+		if errResp != nil {
+			return emitRemove(*errResp)
+		}
+		if !confirmRemove(os.Stdin, os.Stderr, plan) {
+			return emitRemove(protocol.RemoveResponse{
+				Status: protocol.Status{OK: false, Message: "cancelled — nothing was removed"},
+				Iface:  plan.Iface,
+			})
+		}
+	}
+	return emitRemove(server.Remove(opts))
+}
+
+// confirmRemove prints the teardown summary to out and reads a y/N answer from in.
+// Only "y"/"yes" (case-insensitive) confirms; empty, EOF, or anything else cancels
+// — the safe default for a destructive, key-losing operation. It is split out (and
+// takes its streams) so the prompt logic is unit-testable without a real terminal.
+func confirmRemove(in io.Reader, out io.Writer, plan server.RemovePlan) bool {
+	fmt.Fprintf(out, "wgpeer server remove %s — this will:\n", plan.Iface)
+	fmt.Fprintf(out, "  • stop & disable  wg-quick@%s\n", plan.Iface)
+	if plan.SidecarExists {
+		fmt.Fprintf(out, "  • delete sidecar  %s\n", plan.SidecarPath)
+	} else {
+		fmt.Fprintf(out, "  • (no sidecar at  %s — skipping)\n", plan.SidecarPath)
+	}
+	if plan.ConfExists {
+		fmt.Fprintf(out, "  • delete config   %s\n", plan.ConfPath)
+	} else {
+		fmt.Fprintf(out, "  • (no config at   %s — skipping)\n", plan.ConfPath)
+	}
+	if plan.BackupPath != "" {
+		fmt.Fprintf(out, "  • back up config  %s → %s (0600, holds the private key)\n", plan.ConfPath, plan.BackupPath)
+	} else if plan.ConfExists {
+		fmt.Fprintf(out, "  • NO backup — the server private key will be lost irrecoverably\n")
+	}
+	fmt.Fprint(out, "Proceed? [y/N]: ")
+
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// emitRemove writes the human summary to stderr and the JSON response to stdout.
+func emitRemove(resp protocol.RemoveResponse) int {
+	printRemoveSummary(os.Stderr, resp)
+	return emit(resp)
+}
+
+func removeBadRequest(msg string) protocol.RemoveResponse {
+	return protocol.RemoveResponse{Status: protocol.Status{OK: false, Error: protocol.ErrBadRequest, Message: msg}}
+}
+
+// printRemoveSummary renders the human-readable half of a remove result.
+func printRemoveSummary(w io.Writer, r protocol.RemoveResponse) {
+	if !r.OK {
+		fmt.Fprintf(w, "wgpeer server remove: %s\n", r.Message)
+		return
+	}
+	fmt.Fprintf(w, "removed %s\n", r.Iface)
+	if r.Disabled {
+		fmt.Fprintf(w, "  disabled:   yes (systemctl disable --now wg-quick@%s)\n", r.Iface)
+	} else {
+		fmt.Fprintf(w, "  disabled:   no (was not enabled/active, or disable failed — see notes)\n")
+	}
+	for _, p := range r.Removed {
+		fmt.Fprintf(w, "  deleted:    %s\n", p)
+	}
+	if r.BackupPath != "" {
+		fmt.Fprintf(w, "  backup:     %s\n", r.BackupPath)
+	} else {
+		fmt.Fprintf(w, "  backup:     none (--no-backup)\n")
+	}
+	if r.Message != "" {
+		fmt.Fprintf(w, "  notes:      %s\n", r.Message)
+	}
+}
+
 // stdinIsInteractive reports whether stdin is a terminal (no piped request).
 // A char device (tty) reads as interactive; a pipe or regular file — the client
 // over ssh, or a shell redirect — does not, so the wrapper path is never
@@ -307,6 +426,8 @@ func okOf(resp any) (bool, bool) {
 	case protocol.KillResponse:
 		return r.OK, true
 	case protocol.ProvideResponse:
+		return r.OK, true
+	case protocol.RemoveResponse:
 		return r.OK, true
 	default:
 		return false, false

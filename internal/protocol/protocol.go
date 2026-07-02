@@ -9,6 +9,7 @@ const (
 	OpList    = "list"
 	OpKill    = "kill"
 	OpProvide = "provide"
+	OpRemove  = "remove"
 )
 
 // Error codes (spec §5, §11). Returned in Status.Error on failure.
@@ -117,4 +118,19 @@ type ProvideResponse struct {
 	MTU                 int        `json:"mtu,omitempty"`                  // pushed to clients; 0 = unset
 	PersistentKeepalive int        `json:"persistent_keepalive,omitempty"` // pushed to clients; 0 = unset
 	Enabled             bool       `json:"enabled"`                        // systemctl enable --now wg-quick@<iface> ran
+}
+
+// RemoveResponse is returned for OpRemove: the inverse of provide. It tears an
+// interface down — stops and disables wg-quick, then deletes the wg .conf and the
+// sidecar (after an optional backup of the key-bearing conf). The fields report
+// what actually happened so a hand run's stderr summary — or a future wrapper —
+// can see the backup location and confirm the interface is gone.
+type RemoveResponse struct {
+	Status
+	Iface       string   `json:"iface,omitempty"`
+	ConfPath    string   `json:"conf_path,omitempty"`
+	SidecarPath string   `json:"sidecar_path,omitempty"`
+	BackupPath  string   `json:"backup_path,omitempty"` // where the .conf was copied; "" = no backup made
+	Disabled    bool     `json:"disabled"`              // systemctl disable --now wg-quick@<iface> succeeded
+	Removed     []string `json:"removed,omitempty"`     // files actually deleted
 }
