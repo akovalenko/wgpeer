@@ -9,17 +9,23 @@ See [`wireguard-peer-cli-spec.md`](wireguard-peer-cli-spec.md) for the full desi
 
 ## How it works
 
-One binary, two modes (a shared `protocol` package keeps them in lockstep):
+One binary, two modes (a shared `protocol` package keeps them in lockstep) — or
+just the client half, where that is all that can run (see
+[Client-only builds](#client-only-builds)):
 
-- `wgpeer server --iface <wgN> <add|list|kill>` — the privileged half, run under
-  `ssh` + `sudo` on the server. Headless: reads a JSON request on stdin, writes a
-  JSON response on stdout, exit code is the status. It edits
+- `wgpeer server --iface <wgN> <add|list|kill|rename>` — the privileged half, run
+  under `ssh` + `sudo` on the server. Headless: reads a JSON request on stdin,
+  writes a JSON response on stdout, exit code is the status. It edits
   `/etc/wireguard/<iface>.conf` under an `flock`, writes atomically
   (temp → fsync → rename), and applies the delta with `wg syncconf` (no device
   bounce, no hooks).
-- `wgpeer client <add|list|kill>` — the unprivileged half, on termux/laptop. It
-  generates the private key **locally** (it never leaves the machine), drives the
-  server over ssh, assembles the client config, and draws the QR.
+- `wgpeer client <add|list|kill|rename>` — the unprivileged half, on termux/laptop.
+  It generates the private key **locally** (it never leaves the machine), drives
+  the server over ssh, assembles the client config, and draws the QR.
+
+The word `client` is optional — `wgpeer add bob` is `wgpeer client add bob`. The
+client half is the one typed daily, so it is what a bare subcommand means; the
+server half always spells out `wgpeer server …`.
 
 Two server-side subcommands manage a whole interface rather than its peers:
 
@@ -36,8 +42,33 @@ Two server-side subcommands manage a whole interface rather than its peers:
 go build -o wgpeer .                 # native
 # cross-compile (pure Go, no cgo):
 GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -o wgpeer-linux-amd64 .
-GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -o wgpeer-android-arm64 .   # termux
+GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -tags clientonly -o wgpeer-android-arm64 .   # termux
+GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build -o wgpeer-darwin-arm64 .    # client-only
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o wgpeer-windows-amd64.exe .
 ```
+
+### Client-only builds
+
+The server half is Linux-only — not by accident of a syscall, but because every
+path it drives is one: `wg-quick`, `systemctl`, `/etc/wireguard`. So on any
+non-Linux target it is simply left out, automatically:
+
+| Target | What you get |
+|--------|--------------|
+| Linux | both halves (default) |
+| Linux + `-tags clientonly` | client only |
+| Android/termux | both halves — **unless** `-tags clientonly` (see below) |
+| macOS, Windows, \*BSD | client only, automatically |
+
+The client half is unchanged in such a build — it does what it always does,
+driving a real Linux server over ssh. Only the local privileged code is absent,
+and `wgpeer server …` says so instead of failing obscurely. It is also a little
+smaller, which is the other reason to ask for it on Linux.
+
+Note the termux row: Go's `android` target satisfies the `linux` build
+constraint, so an android build carries the server half unless you say
+`-tags clientonly`. On a phone you want the tag — the privileged code has
+nothing to drive there.
 
 Server side:
 
@@ -71,6 +102,12 @@ wgpeer client add work --qr never > work.conf   # suppress the QR entirely
 wgpeer client list
 wgpeer client list --json
 wgpeer client kill bob
+wgpeer client rename bob "Боб на новом телефоне"   # relabel; the key stays put
+
+# "client" is optional — these are the same commands:
+wgpeer add bob
+wgpeer list
+wgpeer kill bob
 ```
 
 The config is written to **stdout** and the terminal QR to **stderr**, so
@@ -82,6 +119,14 @@ The peer **name is a label, not an identity** — the real identity is the publi
 key. `kill` resolves a name to its key; adding a duplicate name fails with
 `name_taken`. Names must be a single line (no control characters) and carry no
 leading/trailing whitespace.
+
+Because it is only a label, `rename` is cheap: it moves the `# name:` comment and
+nothing else, so the peer keeps its key, PSK and address and any config already
+handed out keeps working (no re-issue, no new QR). It takes exactly two names —
+quote any that contain spaces — refuses a name already in use (`name_taken`,
+the same uniqueness `add` enforces, since the label is what `kill`/`rename`
+resolve on), and skips `wg syncconf`: the kernel never sees the comment, so
+there is nothing to push.
 
 ## Provisioning an interface (server side)
 
@@ -143,5 +188,11 @@ A non-zero exit carries a JSON `{"ok":false,"error":...}` with one of:
 
 ```sh
 go test ./...                              # unit tests (parser, allocator, client flow)
+go test -tags clientonly ./...             # same, minus the server half
+GOOS=darwin go vet ./... && GOOS=windows go vet ./...   # client-only builds still compile
 sudo go test -tags integration ./internal/server/   # real wg syncconf on a disposable interface
 ```
+
+Tests that need the server half (the in-process client↔server suite, the
+`confirmRemove` prompt) live in files carrying the same build tag as the code
+they exercise, so `./...` stays green on every target.

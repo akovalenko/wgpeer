@@ -184,6 +184,28 @@ func (c *Client) Kill(name string) (protocol.KillResponse, error) {
 	return resp, nil
 }
 
+// Rename relabels a peer: from selects it (as kill does), to is the new label.
+// The peer's key, PSK and address are untouched, so configs already handed out
+// keep working. The new name is validated locally first — a name that could not
+// be written back as a "# name:" comment need not cost an ssh round-trip.
+func (c *Client) Rename(from, to string) (protocol.RenameResponse, error) {
+	var resp protocol.RenameResponse
+	if err := wgconf.ValidPeerName(to); err != nil {
+		return resp, fmt.Errorf("invalid new name: %w", err)
+	}
+	out, err := c.call(protocol.OpRename, protocol.Request{Op: protocol.OpRename, Name: from, NewName: to})
+	if err != nil {
+		return resp, err
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return resp, fmt.Errorf("decoding rename response: %w", err)
+	}
+	if !resp.OK {
+		return resp, responseError(resp.Status)
+	}
+	return resp, nil
+}
+
 func (c *Client) call(op string, req protocol.Request) ([]byte, error) {
 	reqJSON, err := json.Marshal(req)
 	if err != nil {

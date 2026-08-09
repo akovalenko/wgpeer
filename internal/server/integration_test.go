@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && linux
 
 // Integration test for the server's real apply path (spec §13, Stage 2). It
 // stands up a disposable WireGuard interface, runs add/kill through the real

@@ -1,7 +1,15 @@
+//go:build linux
+
 // Package server implements the privileged half of wgpeer (spec §2): it owns
 // /etc/wireguard/<iface>.conf, mutates peer blocks under an flock with atomic
 // writes, and applies the delta with `wg syncconf`. It runs headless behind
 // ssh+sudo and speaks the JSON protocol.
+//
+// It is Linux-only, and not merely by accident of syscall.Flock: every path it
+// drives — wg-quick, systemctl, /etc/wireguard — is a Linux WireGuard
+// deployment. Elsewhere wgpeer builds client-only and reaches this half over
+// ssh (see the cli package). Note that GOOS=android satisfies `linux`, so a
+// termux build must ask for client-only explicitly: -tags clientonly.
 package server
 
 import (
@@ -162,6 +170,53 @@ func (s *Server) Kill(req protocol.Request) protocol.KillResponse {
 	}
 }
 
+// Rename relabels an existing peer. Identity is the public key, so this only
+// moves the "# name:" comment: the peer keeps its key, PSK and address, and any
+// client config already handed out stays valid.
+//
+// The new name must be free — the label is what kill/rename resolve on, so a
+// duplicate would make one of the two peers unreachable by name (protocol
+// name_taken, the same guard `add` applies). Renaming a peer to the name it
+// already has is a no-op that succeeds.
+func (s *Server) Rename(req protocol.Request) protocol.RenameResponse {
+	if req.Name == "" {
+		return protocol.RenameResponse{Status: badRequest("name is required")}
+	}
+	if err := wgconf.ValidPeerName(req.NewName); err != nil {
+		return protocol.RenameResponse{Status: badRequest("new_name: " + err.Error())}
+	}
+	lock, err := acquireLock(s.Cfg.ConfPath, s.lockTimeout())
+	if err != nil {
+		return protocol.RenameResponse{Status: lockOrInternal(err)}
+	}
+	defer releaseLock(lock)
+
+	conf, errResp := s.read()
+	if errResp != nil {
+		return protocol.RenameResponse{Status: *errResp}
+	}
+	i := conf.FindByName(req.Name)
+	if i < 0 {
+		return protocol.RenameResponse{Status: status(protocol.ErrNotFound, fmt.Sprintf("no peer named %q", req.Name))}
+	}
+	// j == i means "rename to itself": allowed, and it must not trip the
+	// duplicate check.
+	if j := conf.FindByName(req.NewName); j >= 0 && j != i {
+		return protocol.RenameResponse{Status: status(protocol.ErrNameTaken, fmt.Sprintf("name %q already exists", req.NewName))}
+	}
+	conf.Peers[i].Name = req.NewName
+	// write, not commit: the name lives in a comment, so nothing the kernel
+	// knows about changed and `wg syncconf` would be a pointless round-trip that
+	// could only fail (e.g. on an interface that is not up).
+	if errResp := s.write(conf); errResp != nil {
+		return protocol.RenameResponse{Status: *errResp}
+	}
+	return protocol.RenameResponse{
+		Status:  protocol.Status{OK: true},
+		Renamed: &protocol.RenamedPeer{From: req.Name, To: req.NewName, PublicKey: conf.Peers[i].PublicKey},
+	}
+}
+
 // read loads and parses the conf file.
 func (s *Server) read() (*wgconf.Conf, *protocol.Status) {
 	data, err := os.ReadFile(s.Cfg.ConfPath)
@@ -177,11 +232,20 @@ func (s *Server) read() (*wgconf.Conf, *protocol.Status) {
 	return conf, nil
 }
 
-// commit persists the conf atomically (0600) and applies the delta to wg.
-func (s *Server) commit(conf *wgconf.Conf) *protocol.Status {
+// write persists the conf atomically (0600) without touching the live device —
+// for mutations the kernel cannot see (a name comment).
+func (s *Server) write(conf *wgconf.Conf) *protocol.Status {
 	if err := atomicWrite(s.Cfg.ConfPath, conf.Serialize(), 0600); err != nil {
 		st := internal("writing " + s.Cfg.ConfPath + ": " + err.Error())
 		return &st
+	}
+	return nil
+}
+
+// commit persists the conf atomically (0600) and applies the delta to wg.
+func (s *Server) commit(conf *wgconf.Conf) *protocol.Status {
+	if st := s.write(conf); st != nil {
+		return st
 	}
 	if s.Apply != nil {
 		if err := s.Apply(s.Cfg.Iface, s.Cfg.ConfPath); err != nil {

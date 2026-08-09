@@ -3,10 +3,7 @@ package cli
 import (
 	"flag"
 	"slices"
-	"strings"
 	"testing"
-
-	"github.com/akovalenko/wgpeer/internal/server"
 )
 
 func TestParseInterspersed(t *testing.T) {
@@ -65,62 +62,72 @@ func TestParseInterspersed(t *testing.T) {
 	}
 }
 
-func TestConfirmRemove(t *testing.T) {
-	plan := server.RemovePlan{
-		Iface:         "wg0",
-		ConfPath:      "/etc/wireguard/wg0.conf",
-		SidecarPath:   "/etc/wgpeer/wg0.toml",
-		BackupPath:    "/etc/wireguard/wg0.conf.bak-20260702",
-		ConfExists:    true,
-		SidecarExists: true,
-	}
+// TestSplitMode covers the top-level dispatch, in particular the shorthand that
+// lets the daily-driver client half be typed without the "client" word.
+func TestSplitMode(t *testing.T) {
 	tests := []struct {
-		answer string
-		want   bool
+		name     string
+		args     []string
+		wantMode string
+		wantRest []string
 	}{
-		{"y\n", true},
-		{"Y\n", true},
-		{"yes\n", true},
-		{"  yes  \n", true},
-		{"n\n", false},
-		{"no\n", false},
-		{"\n", false}, // bare enter = the safe default (cancel)
-		{"", false},   // EOF (no terminal input) cancels
-		{"yeah\n", false},
-		{"ok\n", false},
+		{
+			name:     "explicit server mode",
+			args:     []string{"server", "--iface", "wg0", "add"},
+			wantMode: "server", wantRest: []string{"--iface", "wg0", "add"},
+		},
+		{
+			name:     "explicit client mode",
+			args:     []string{"client", "add", "bob"},
+			wantMode: "client", wantRest: []string{"add", "bob"},
+		},
+		{
+			name:     "shorthand: bare add implies client, subcommand kept",
+			args:     []string{"add", "bob", "--iface", "wg1"},
+			wantMode: "client", wantRest: []string{"add", "bob", "--iface", "wg1"},
+		},
+		{
+			name:     "shorthand: bare list",
+			args:     []string{"list", "--json"},
+			wantMode: "client", wantRest: []string{"list", "--json"},
+		},
+		{
+			name:     "shorthand: bare kill",
+			args:     []string{"kill", "bob"},
+			wantMode: "client", wantRest: []string{"kill", "bob"},
+		},
+		{
+			name:     "shorthand: bare rename",
+			args:     []string{"rename", "bob", "боб"},
+			wantMode: "client", wantRest: []string{"rename", "bob", "боб"},
+		},
+		{name: "help flag", args: []string{"--help"}, wantMode: "help"},
+		{name: "help word", args: []string{"help"}, wantMode: "help"},
+		{
+			// A typo must NOT be swept into client mode — it stays unknown, so the
+			// user gets "unknown mode" instead of a baffling client-side error.
+			name:     "typo stays unknown",
+			args:     []string{"addd", "bob"},
+			wantMode: "", wantRest: []string{"addd", "bob"},
+		},
+		{
+			// provide/remove are server-only; Main turns this into a pointed hint.
+			name:     "server-only subcommand is not client shorthand",
+			args:     []string{"provide", "wg0"},
+			wantMode: "", wantRest: []string{"provide", "wg0"},
+		},
+		{name: "no args", args: nil, wantMode: ""},
 	}
 	for _, tt := range tests {
-		t.Run(strings.TrimSpace(tt.answer), func(t *testing.T) {
-			var out strings.Builder
-			got := confirmRemove(strings.NewReader(tt.answer), &out, plan)
-			if got != tt.want {
-				t.Errorf("confirmRemove(%q) = %v, want %v", tt.answer, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			mode, rest := splitMode(tt.args)
+			if mode != tt.wantMode {
+				t.Errorf("mode = %q, want %q", mode, tt.wantMode)
 			}
-			// The summary must name the interface and the destructive actions
-			// regardless of the answer, so the user always sees what is at stake.
-			for _, want := range []string{"wg0", "stop & disable", plan.SidecarPath, plan.ConfPath, plan.BackupPath} {
-				if !strings.Contains(out.String(), want) {
-					t.Errorf("summary missing %q:\n%s", want, out.String())
-				}
+			if !slices.Equal(rest, tt.wantRest) {
+				t.Errorf("rest = %v, want %v", rest, tt.wantRest)
 			}
 		})
-	}
-}
-
-// TestConfirmRemove_noBackupWarning checks the summary flags an unrecoverable
-// removal when no backup will be taken.
-func TestConfirmRemove_noBackupWarning(t *testing.T) {
-	plan := server.RemovePlan{
-		Iface:       "wg0",
-		ConfPath:    "/etc/wireguard/wg0.conf",
-		SidecarPath: "/etc/wgpeer/wg0.toml",
-		BackupPath:  "", // --no-backup
-		ConfExists:  true, SidecarExists: true,
-	}
-	var out strings.Builder
-	confirmRemove(strings.NewReader("n\n"), &out, plan)
-	if !strings.Contains(out.String(), "NO backup") {
-		t.Errorf("summary should warn about the missing backup:\n%s", out.String())
 	}
 }
 

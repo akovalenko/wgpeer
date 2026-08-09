@@ -8,6 +8,7 @@ const (
 	OpAdd     = "add"
 	OpList    = "list"
 	OpKill    = "kill"
+	OpRename  = "rename"
 	OpProvide = "provide"
 	OpRemove  = "remove"
 )
@@ -32,9 +33,13 @@ const (
 // mutating — an unknown name must fail without ever creating a peer. "" selects
 // the default (first menu entry). It is a deliberate, backward-compatible
 // addition over the spec's AddRequest sketch (spec §5, §9).
+//
+// NewName carries the target label of a rename; Name then selects the peer to
+// relabel, exactly as it does for kill.
 type Request struct {
 	Op           string `json:"op"`
 	Name         string `json:"name,omitempty"`
+	NewName      string `json:"new_name,omitempty"` // rename target
 	PublicKey    string `json:"public_key,omitempty"`
 	PresharedKey string `json:"preshared_key,omitempty"` // "" / null = no PSK
 	Endpoint     string `json:"endpoint,omitempty"`      // "" = default (menu[0])
@@ -57,6 +62,15 @@ type PeerInfo struct {
 // RemovedPeer identifies the peer a kill removed.
 type RemovedPeer struct {
 	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+}
+
+// RenamedPeer reports a rename. PublicKey is echoed to make the point that the
+// peer's identity did not change — only its label moved (spec §5: the name is a
+// label, the key is the identity).
+type RenamedPeer struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
 	PublicKey string `json:"public_key"`
 }
 
@@ -97,6 +111,12 @@ type ListResponse struct {
 type KillResponse struct {
 	Status
 	Removed *RemovedPeer `json:"removed,omitempty"`
+}
+
+// RenameResponse is returned for OpRename.
+type RenameResponse struct {
+	Status
+	Renamed *RenamedPeer `json:"renamed,omitempty"`
 }
 
 // ProvideResponse is returned for OpProvide: it bootstraps a brand-new interface
